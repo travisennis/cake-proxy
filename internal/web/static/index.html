@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cake-proxy</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark">◆</span> cake-proxy</div>
+  <div class="topmeta">
+    <span id="upstream" class="upstream" title="upstream"></span>
+    <span id="conn" class="conn">connecting…</span>
+  </div>
+  <div class="actions">
+    <button id="pause" class="ghost" type="button" title="Pause live refresh">Pause</button>
+    <button id="clear" class="ghost danger" type="button" title="Delete all captured exchanges">Clear</button>
+  </div>
+</header>
+<main class="layout">
+  <section class="sidebar">
+    <div class="sidebar-head">
+      <input id="filter" type="search" placeholder="Filter model, path, status…" autocomplete="off" spellcheck="false" aria-label="Filter exchanges">
+      <span id="count" class="count">0</span>
+    </div>
+    <div id="list" class="list" role="listbox" aria-label="Captured exchanges"></div>
+  </section>
+  <section id="detail" class="detail" aria-live="polite"></section>
+</main>
+<script src="/assets/app.js"></script>
+</body>
+</html>
