@@ -220,7 +220,23 @@ func printStartup(listen, upstream, dataDir string, keep int, keyEnv, keyHeader 
 	fmt.Printf("  base_url = \"%s/v1\"\n", base)
 	fmt.Println("  api_key_env = \"CAKE_PROXY_TOKEN\"")
 	fmt.Println("  api_type = \"chat_completions\"   # or \"responses\"")
+	if provider := providerForUpstream(upstream); provider != "" {
+		fmt.Printf("  provider = \"%s\"\n", provider)
+	}
 	fmt.Println()
+}
+
+// providerForUpstream suggests the provider strategy cake would have inferred
+// from the real base URL; pointing cake at the proxy hides that signal.
+func providerForUpstream(upstream string) string {
+	switch {
+	case strings.Contains(upstream, "opencode.ai"):
+		return "opencode"
+	case strings.Contains(upstream, "openrouter.ai"):
+		return "openrouter"
+	default:
+		return ""
+	}
 }
 
 func publicBase(listen string) string {

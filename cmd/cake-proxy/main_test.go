@@ -16,6 +16,19 @@ func TestPublicBase(t *testing.T) {
 	}
 }
 
+func TestProviderForUpstream(t *testing.T) {
+	cases := map[string]string{
+		"https://opencode.ai/inference/go/openai/v1": "opencode",
+		"https://openrouter.ai/api/v1":               "openrouter",
+		"https://api.example.test/v1":                "",
+	}
+	for upstream, want := range cases {
+		if got := providerForUpstream(upstream); got != want {
+			t.Errorf("providerForUpstream(%q) = %q, want %q", upstream, got, want)
+		}
+	}
+}
+
 func TestCheckListen(t *testing.T) {
 	cases := []struct {
 		listen      string
