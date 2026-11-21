@@ -81,6 +81,20 @@ override). The default retains the newest 200 finished exchanges; use `-keep 0`
 to keep all or a smaller number to bound disk use. Set `-data-dir ""` for a
 memory-only run. Files are created with mode `0600` in a `0700` directory.
 
+## Troubleshooting
+
+### `Request is missing x-opencode-session`
+
+Cake only sends `x-opencode-session` when the model entry selects the OpenCode
+provider. Because the proxy's `base_url` is `127.0.0.1`, cake cannot infer
+OpenCode from the hostname. Add `provider = "opencode"` to the `[[models]]`
+entry; generated `reasoning_efforts` variants inherit it. The proxy logs a
+one-time warning when an OpenCode upstream request arrives without the header.
+
+A session created before the fix pinned the old provider identity. Start a new
+session, or resume with `--allow-session-model-change` after reviewing the
+diff.
+
 ## Limitations
 
 - **Not for the Codex ChatGPT subscription backend.** Cake keys its Codex

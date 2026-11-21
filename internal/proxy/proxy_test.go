@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"log/slog"
@@ -310,6 +311,127 @@ func TestMislabeledSSEBodyIsParsed(t *testing.T) {
 	}
 	if record.OutputText != "Hi" {
 		t.Fatalf("output = %q", record.OutputText)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestOpenCodeHost(t *testing.T) {
+	cases := map[string]bool{
+		"opencode.ai":      true,
+		"zen.opencode.ai":  true,
+		"OPENCODE.AI":      true,
+		"notopencode.ai":   false,
+		"opencode.ai.evil": false,
+		"example.com":      false,
+		"":                 false,
+	}
+	for host, want := range cases {
+		if got := isOpenCodeHost(host); got != want {
+			t.Errorf("isOpenCodeHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+func TestMissingOpenCodeSessionWarnsOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	store, err := capture.New("", 10, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := url.Parse("https://opencode.ai/zen/go/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := New(Options{
+		Upstream:     target,
+		Store:        store,
+		MaxBodyBytes: 1 << 20,
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"MissingSessionID"}}`)),
+			Request:    r,
+		}, nil
+	})
+	server := httptest.NewServer(relay)
+	defer server.Close()
+
+	send := func(session string) {
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		if session != "" {
+			request.Header.Set("x-opencode-session", session)
+		}
+		response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+	}
+
+	send("")
+	if got := strings.Count(logs.String(), "x-opencode-session"); got != 1 {
+		t.Fatalf("missing-session warnings = %d, want 1; logs: %s", got, logs.String())
+	}
+	send("")
+	if got := strings.Count(logs.String(), "x-opencode-session"); got != 1 {
+		t.Fatalf("warning repeated: %d; logs: %s", got, logs.String())
+	}
+	send("session-id")
+	if got := strings.Count(logs.String(), "x-opencode-session"); got != 1 {
+		t.Fatalf("warning after header present: %d; logs: %s", got, logs.String())
+	}
+}
+
+func TestProviderHeadersAreForwarded(t *testing.T) {
+	seen := make(chan http.Header, 1)
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	})
+	store, server := setup(t, upstream, nil)
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-opencode-session", "019c0ffee-session")
+	request.Header.Set("X-Custom-Trace", "trace-1")
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	got := <-seen
+	if got.Get("x-opencode-session") != "019c0ffee-session" {
+		t.Errorf("upstream x-opencode-session = %q", got.Get("x-opencode-session"))
+	}
+	if got.Get("X-Custom-Trace") != "trace-1" {
+		t.Errorf("upstream X-Custom-Trace = %q", got.Get("X-Custom-Trace"))
+	}
+
+	record := waitForRecord(t, store, response.Header.Get("X-Cake-Proxy-Exchange"))
+	if record.RequestHeaders["X-Opencode-Session"][0] != "019c0ffee-session" {
+		t.Errorf("captured x-opencode-session = %v", record.RequestHeaders["X-Opencode-Session"])
 	}
 }
 

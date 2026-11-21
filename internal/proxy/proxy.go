@@ -16,6 +16,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/travisennis/cake-proxy/internal/capture"
@@ -42,6 +43,8 @@ type Proxy struct {
 	client    *http.Client
 	maxBody   int64
 	log       *slog.Logger
+	openCode  bool
+	warnOnce  sync.Once
 }
 
 // New validates opts and builds the relay.
@@ -100,8 +103,9 @@ func New(opts Options) (*Proxy, error) {
 				return http.ErrUseLastResponse
 			},
 		},
-		maxBody: opts.MaxBodyBytes,
-		log:     logger,
+		maxBody:  opts.MaxBodyBytes,
+		log:      logger,
+		openCode: isOpenCodeHost(upstream.Hostname()),
 	}, nil
 }
 
@@ -167,6 +171,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			upstreamRequest.Header.Set(p.keyHeader, p.key)
 		}
+	}
+	if p.openCode && upstreamRequest.Header.Get("x-opencode-session") == "" {
+		p.warnOnce.Do(func() {
+			p.log.Warn("OpenCode upstream request has no x-opencode-session; set provider = \"opencode\" on the cake model entry", "path", r.URL.Path)
+		})
 	}
 
 	start := time.Now()
@@ -407,6 +416,11 @@ func looksLikeSSE(raw []byte) bool {
 	trimmed := bytes.TrimLeft(raw, "\xef\xbb\xbf \t\r\n")
 	return bytes.HasPrefix(trimmed, []byte("data:")) ||
 		bytes.HasPrefix(trimmed, []byte("event:"))
+}
+
+func isOpenCodeHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai")
 }
 
 func copyRequestHeaders(dst, src http.Header) {

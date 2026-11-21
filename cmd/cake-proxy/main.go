@@ -259,6 +259,7 @@ func printStartup(listen, upstream, dataDir string, keep int, keyEnv, keyHeader 
 	fmt.Println("  api_type = \"chat_completions\"   # or \"responses\"")
 	if provider := providerForUpstream(upstream); provider != "" {
 		fmt.Printf("  provider = \"%s\"\n", provider)
+		fmt.Println("  # keep provider explicit: the localhost URL hides the upstream host")
 	}
 	fmt.Println()
 }

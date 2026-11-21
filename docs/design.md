@@ -18,18 +18,22 @@ tools, transform prompts, or retry requests.
    preserved. The request body is read once under `-max-body-mb`.
 3. A record is created in `in_flight` state, and its id is returned to the
    client in `X-Cake-Proxy-Exchange` even when the upstream later fails.
-4. Headers are copied except hop-by-hop headers, `Host`, `Content-Length`, and
+4. Provider headers such as `x-opencode-session` are ordinary end-to-end
+   headers and pass through untouched. If the upstream host is `opencode.ai`
+   and the header is absent, the relay logs one hint that cake must set
+   `provider = "opencode"`; it does not invent the value.
+5. Headers are copied except hop-by-hop headers, `Host`, `Content-Length`, and
    `Accept-Encoding`. Compression is disabled so captures are plain text.
-5. If `-upstream-key-env` is set, the client credential is replaced in the
+6. If `-upstream-key-env` is set, the client credential is replaced in the
    configured header. `Authorization` is always removed first; an
    `Authorization` replacement is prefixed with `Bearer `, other headers get
    the raw value.
-6. The upstream response status and headers are copied back. SSE responses
+7. The upstream response status and headers are copied back. SSE responses
    have `Content-Length` removed.
-7. Bytes are relayed as they arrive. SSE chunks are fed to an incremental
+8. Bytes are relayed as they arrive. SSE chunks are fed to an incremental
    parser and flushed immediately. The relay keeps a capped copy of the body,
    plus capped parsed events.
-8. On completion the record is summarized (model, usage, finish reason, output
+9. On completion the record is summarized (model, usage, finish reason, output
    text), marked `complete`, `canceled`, or `error`, and written to disk.
 
 ## Credentials
