@@ -106,8 +106,13 @@ The UI is embedded in the binary (`internal/web/static`) and needs no build
 step or network access. It polls `/api/exchanges` every 1.2 seconds, refreshes
 the selected record while it is in flight, and renders request messages, tool
 calls, responses, raw JSON, stream events, and headers. All provider content is
-rendered with `textContent`, never as HTML. Tab selection, scroll position, and
-open event rows are preserved across refreshes.
+rendered with `textContent`, never as HTML, under a same-origin CSP. Tab
+selection, scroll position, and open event rows are preserved across refreshes.
+
+A loopback listener rejects `Host` headers that do not name a loopback host.
+That blocks a DNS-rebinding page from reading stored prompts through the
+browser. A remote bind (`-allow-remote`) skips the check and has no
+authentication, so it is only appropriate on a trusted network.
 
 ## Testing
 

@@ -138,9 +138,14 @@ func run(args []string) int {
 	mux.Handle("/responses", relay)
 	mux.Handle("/", ui)
 
+	var handler http.Handler = mux
+	if host, _, err := net.SplitHostPort(*listen); err == nil && isLoopbackHost(host) {
+		handler = hostGuard(mux, loopbackHosts(*listen))
+	}
+
 	server := &http.Server{
 		Addr:              *listen,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
@@ -178,13 +183,45 @@ func checkListen(listen string, allowRemote bool) error {
 	if port == "" {
 		return fmt.Errorf("invalid -listen %q: missing port", listen)
 	}
-	ip := net.ParseIP(host)
-	loopback := host != "" &&
-		(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()))
-	if !loopback && !allowRemote {
+	if !isLoopbackHost(host) && !allowRemote {
 		return fmt.Errorf("refusing to bind %q: the inspector has no authentication; use -allow-remote to override", listen)
 	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return host != "" &&
+		(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()))
+}
+
+// loopbackHosts is the Host header allowlist for a loopback listener. It
+// blocks DNS-rebinding pages from reading the inspector over 127.0.0.1.
+func loopbackHosts(listen string) map[string]bool {
+	allowed := map[string]bool{
+		"127.0.0.1": true,
+		"localhost": true,
+		"::1":       true,
+	}
+	if host, _, err := net.SplitHostPort(listen); err == nil {
+		allowed[strings.ToLower(strings.Trim(host, "[]"))] = true
+	}
+	return allowed
+}
+
+func hostGuard(next http.Handler, allowed map[string]bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if parsed, _, err := net.SplitHostPort(r.Host); err == nil {
+			host = parsed
+		}
+		host = strings.ToLower(strings.Trim(host, "[]"))
+		if !allowed[host] {
+			http.Error(w, "cake-proxy: unexpected Host header", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func printStartup(listen, upstream, dataDir string, keep int, keyEnv, keyHeader string, keySet bool) {

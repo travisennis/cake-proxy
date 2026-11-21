@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestPublicBase(t *testing.T) {
 	cases := map[string]string{
@@ -25,6 +29,29 @@ func TestProviderForUpstream(t *testing.T) {
 	for upstream, want := range cases {
 		if got := providerForUpstream(upstream); got != want {
 			t.Errorf("providerForUpstream(%q) = %q, want %q", upstream, got, want)
+		}
+	}
+}
+
+func TestHostGuard(t *testing.T) {
+	handler := hostGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), loopbackHosts("127.0.0.1:8787"))
+
+	cases := map[string]int{
+		"127.0.0.1:8787": http.StatusNoContent,
+		"localhost:8787": http.StatusNoContent,
+		"[::1]:8787":     http.StatusNoContent,
+		"127.0.0.1":      http.StatusNoContent,
+		"evil.example":   http.StatusMisdirectedRequest,
+	}
+	for host, want := range cases {
+		request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8787/", nil)
+		request.Host = host
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Errorf("Host %q = %d, want %d", host, response.Code, want)
 		}
 	}
 }

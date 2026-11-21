@@ -39,6 +39,8 @@ Open <http://127.0.0.1:8787/> to inspect requests as they arrive.
 
 Everything is local. The UI has no authentication, so the proxy binds
 `127.0.0.1` and refuses a non-loopback address unless `-allow-remote` is set.
+A loopback bind also rejects unexpected `Host` headers, which blocks a
+DNS-rebinding page from reading the inspector through the browser.
 
 ## Credentials
 
