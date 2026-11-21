@@ -45,7 +45,7 @@ Everything is local. The UI has no authentication, so the proxy binds
 By default the client's credential is forwarded untouched. With
 `-upstream-key-env OPENCODE_ZEN_API_TOKEN`, the proxy replaces the client's
 credential with the value of that environment variable. That lets cake keep a
-dummy `api_key_env` value while the real key never leaves the proxy process.
+dummy `api_key_env` value while the real key never enters the cake process.
 
 The real key is never written to the capture store. Credential headers are
 stored as `<redacted>`, and sensitive query parameters (`api_key`, `key`,

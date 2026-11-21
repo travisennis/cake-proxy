@@ -40,12 +40,13 @@ Two modes:
 - `-upstream-key-env NAME`: substitute `$NAME` for the configured header
 
 Cake requires a non-empty `api_key_env`, so the client sends a placeholder in
-the substitution mode. The upstream key lives only in the proxy process. The
-store redacts `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`,
-`X-Api-Key`, `Api-Key`, `Openai-Api-Key`, `X-Auth-Token`, `X-Goog-Api-Key`, and
-`Anthropic-Api-Key`. Sensitive query parameters (`api_key`, `apikey`, `key`,
-`token`, `access_token`, `authorization`) are stored as `redacted`. Request and
-response bodies are stored verbatim; the UI and API are loopback-only.
+the substitution mode. The upstream key is read from the environment at startup
+and is never stored. The store redacts `Authorization`, `Proxy-Authorization`,
+`Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`, `Openai-Api-Key`, `X-Auth-Token`,
+`X-Goog-Api-Key`, and `Anthropic-Api-Key`. Sensitive query parameters (`api_key`,
+`apikey`, `key`, `token`, `access_token`, `authorization`) are stored as
+`redacted`. Request and response bodies are stored verbatim; the UI and API are
+loopback-only.
 
 ## Streaming
 
@@ -116,6 +117,7 @@ open event rows are preserved across refreshes.
   redaction.
 - `internal/proxy`: path mapping, header and credential handling, verbatim
   relay, incremental SSE delivery (the test blocks the upstream until the
-  client has read the first event), error pass-through, oversize rejection.
+  client has read the first event), error pass-through, oversize rejection,
+  redirect pass-through, and query redaction.
 - `internal/web`: index/assets, config, list/detail, clear, 404.
 - `cmd/cake-proxy`: listen validation and public base formatting.
