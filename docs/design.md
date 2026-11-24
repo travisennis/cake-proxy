@@ -57,7 +57,10 @@ loopback-only.
 The relay loop is deliberately simple: `Read` → append to the bounded capture
 buffer → feed the SSE parser when the content type is `text/event-stream` →
 `Write` → `Flush`. Client write errors stop the relay and mark the record
-`canceled`. A read error after the status is sent is recorded but cannot change
+`canceled`. A response relayed through upstream EOF stays `complete` even when
+the client closes the connection right after reading it; that close cancels the
+request context, but `canceled` means the relay stopped before the response was
+delivered. A read error after the status is sent is recorded but cannot change
 the response.
 
 Some providers label an SSE body as `application/json`. If a non-SSE capture

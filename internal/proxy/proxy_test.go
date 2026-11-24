@@ -3,6 +3,8 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -498,6 +500,175 @@ func TestUpstreamFailureIsRecorded(t *testing.T) {
 	record := waitForRecord(t, store, id)
 	if record.State != capture.StateError || record.Error == "" {
 		t.Fatalf("record = %#v", record)
+	}
+}
+
+// testRelay builds a proxy whose upstream is replaced by transport, so a test
+// can control exactly what the relay reads and writes.
+func testRelay(t *testing.T, transport http.RoundTripper) (*Proxy, *capture.Store) {
+	t.Helper()
+	store, err := capture.New("", 10, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := New(Options{
+		Upstream:     &url.URL{Scheme: "http", Host: "upstream.test"},
+		Store:        store,
+		MaxBodyBytes: 1 << 20,
+		Logger:       slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay.client.Transport = transport
+	return relay, store
+}
+
+func upstreamResponse(request *http.Request, contentType string, body io.ReadCloser) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{contentType}},
+		Body:       body,
+		Request:    request,
+	}
+}
+
+// eofReader returns its whole body together with io.EOF, the way the relay
+// sees a provider response that is fully delivered in one read.
+type eofReader struct {
+	data []byte
+	done bool
+}
+
+func (r *eofReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+// partialErrorReader returns its data, then a terminal read error.
+type partialErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *partialErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	r.done = true
+	return copy(p, r.data), nil
+}
+
+// cancelingWriter cancels the request context on the first write, matching a
+// client that closes the connection after reading the response.
+type cancelingWriter struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w *cancelingWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(p)
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
+	}
+	return n, err
+}
+
+// failingWriter models a connection that can no longer be written to.
+type failingWriter struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (w *failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func serveProxy(t *testing.T, relay *Proxy, path string, writer http.ResponseWriter, ctx context.Context) string {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"m","messages":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	relay.ServeHTTP(writer, request.WithContext(ctx))
+	return writer.Header().Get("X-Cake-Proxy-Exchange")
+}
+
+func TestCompleteResponseThenClientCloseIsComplete(t *testing.T) {
+	body := `{"model":"m","choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
+	relay, store := testRelay(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return upstreamResponse(r, "application/json", io.NopCloser(&eofReader{data: []byte(body)})), nil
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writer := &cancelingWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	id := serveProxy(t, relay, "/v1/chat/completions", writer, ctx)
+
+	record := waitForRecord(t, store, id)
+	if record.State != capture.StateComplete {
+		t.Fatalf("state = %q, error = %q; a delivered response followed by client close is complete", record.State, record.Error)
+	}
+	if record.Error != "" {
+		t.Fatalf("complete record has error %q", record.Error)
+	}
+	if record.OutputText != "done" || record.FinishReason != "stop" {
+		t.Fatalf("output = %q, finish = %q", record.OutputText, record.FinishReason)
+	}
+}
+
+func TestStreamingClientCancelIsCanceled(t *testing.T) {
+	stream := "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+	relay, store := testRelay(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return upstreamResponse(r, "text/event-stream", io.NopCloser(strings.NewReader(stream))), nil
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writer := &cancelingWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	id := serveProxy(t, relay, "/v1/chat/completions", writer, ctx)
+
+	record := waitForRecord(t, store, id)
+	if record.State != capture.StateCanceled {
+		t.Fatalf("state = %q, error = %q; a stream cut off by the client is canceled", record.State, record.Error)
+	}
+	if !strings.Contains(record.Error, "client canceled the request") {
+		t.Fatalf("error = %q", record.Error)
+	}
+}
+
+func TestUpstreamReadErrorIsRecordedAsError(t *testing.T) {
+	readErr := errors.New("upstream connection reset")
+	relay, store := testRelay(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := &partialErrorReader{data: []byte(`{"model":"m"}`), err: readErr}
+		return upstreamResponse(r, "application/json", io.NopCloser(body)), nil
+	}))
+	writer := httptest.NewRecorder()
+	id := serveProxy(t, relay, "/v1/chat/completions", writer, context.Background())
+
+	record := waitForRecord(t, store, id)
+	if record.State != capture.StateError {
+		t.Fatalf("state = %q, error = %q; an upstream read error is an error", record.State, record.Error)
+	}
+	if !strings.Contains(record.Error, "read upstream response: upstream connection reset") {
+		t.Fatalf("error = %q", record.Error)
+	}
+}
+
+func TestClientWriteFailureIsCanceled(t *testing.T) {
+	body := `{"model":"m","choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
+	relay, store := testRelay(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return upstreamResponse(r, "application/json", io.NopCloser(&eofReader{data: []byte(body)})), nil
+	}))
+	writeErr := errors.New("broken pipe")
+	writer := &failingWriter{ResponseRecorder: httptest.NewRecorder(), err: writeErr}
+	id := serveProxy(t, relay, "/v1/chat/completions", writer, context.Background())
+
+	record := waitForRecord(t, store, id)
+	if record.State != capture.StateCanceled {
+		t.Fatalf("state = %q, error = %q; a client write failure is canceled", record.State, record.Error)
+	}
+	if !strings.Contains(record.Error, "client write failed: broken pipe") {
+		t.Fatalf("error = %q", record.Error)
 	}
 }
 

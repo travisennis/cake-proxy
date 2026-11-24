@@ -223,17 +223,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		analysis.Model = model
 	}
 
+	// A response relayed through upstream EOF is complete even when the
+	// client closes the connection after reading it: that close cancels
+	// r.Context(), but it is not an interruption of the relay. Canceled means
+	// the relay stopped before the response was delivered.
 	state := capture.StateComplete
 	recordError := ""
 	switch {
-	case relay.writeErr != nil || r.Context().Err() != nil:
+	case relay.writeErr != nil:
 		state = capture.StateCanceled
-		if relay.writeErr != nil {
-			recordError = "client write failed: " + relay.writeErr.Error()
-		} else {
-			recordError = "client canceled the request"
-		}
-	case relay.readErr != nil && !errors.Is(relay.readErr, io.EOF):
+		recordError = "client write failed: " + relay.writeErr.Error()
+	case errors.Is(relay.readErr, io.EOF):
+		// The whole upstream body was relayed.
+	case errors.Is(relay.readErr, context.Canceled) || errors.Is(relay.readErr, context.DeadlineExceeded):
+		state = capture.StateCanceled
+		recordError = "client canceled the request"
+	case relay.readErr != nil:
 		state = capture.StateError
 		recordError = "read upstream response: " + relay.readErr.Error()
 	}
